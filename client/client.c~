@@ -1,0 +1,392 @@
+//CLIENT.C
+#include <stdio.h>
+#include <netdb.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <stdlib.h>
+#include <sys/signal.h>
+#include <strings.h>
+#include <unistd.h>
+#include <errno.h>
+#include <dirent.h> 
+#include <string.h>
+
+
+#define SERVER_TCP_PORT 3000	/* well-known port */
+#define BUFLEN		150	/* buffer length */
+
+void dispatch(char,int);
+void preparepdu (char, int, char [],char []);
+void sendpdu(int, char []);
+void receiver(char, int, char []);
+int returnlength(char []);
+void getonlydata(char [],char []);
+void download(int);
+void upload (int);
+void changedirectory(int);
+void listdirectory(int);
+
+int main(int argc, char **argv)
+{
+	int 	n, i, bytes_to_read;
+	int 	sd, port;
+	struct	hostent		*hp;
+	struct	sockaddr_in server;
+	char	*host, *bp, rbuf[BUFLEN], sbuf[BUFLEN],action;
+
+	switch(argc){
+	case 2:
+		host = argv[1];
+		port = SERVER_TCP_PORT;
+		break;
+	case 3:
+		host = argv[1];
+		port = atoi(argv[2]);
+		break;
+	default:
+		fprintf(stderr, "Usage: %s host [port]\n", argv[0]);
+		exit(1);
+	}
+
+	/* Create a stream socket	*/	
+	if ((sd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+		fprintf(stderr, "Can't creat a socket\n");
+		exit(1);
+	}
+
+	bzero((char *)&server, sizeof(struct sockaddr_in));
+	server.sin_family = AF_INET;
+	server.sin_port = htons(port);
+	if (hp = gethostbyname(host)) 
+	  bcopy(hp->h_addr, (char *)&server.sin_addr, hp->h_length);
+	else if ( inet_aton(host, (struct in_addr *) &server.sin_addr) ){
+	  fprintf(stderr, "Can't get server's address\n");
+	  exit(1);
+	}
+
+	/* Connecting to the server */
+	if (connect(sd, (struct sockaddr *)&server, sizeof(server)) == -1){
+	  fprintf(stderr, "Can't connect \n");
+	  exit(1);
+	}
+	
+	//print action menu
+	while (action!= 'E')
+	{
+	printf("Enter letter for action to take\n");
+	printf("'L' - Request list of files in directory\n");
+	printf("'P' - Request change of directory on server\n");
+	printf("'D' - Download file from server\n");
+	printf("'U' - Upload file to server\n");
+	printf("'E' - Exit\n");
+	
+	scanf(" %c",&action);
+	dispatch(action,sd);
+	}
+	close(sd);
+	return(0);
+}
+
+//Dispatcher function which decides which action to take based on user input
+void dispatch(char a,int sd)
+{
+
+	if (a =='D' || a == 'd'){
+		download(sd);//download file on server
+	}
+	else if (a == 'U' || a == 'u'){
+		upload(sd);
+	}
+	else if (a == 'P' || a == 'p'){
+		changedirectory(sd);
+	}
+	else if (a == 'L' || a == 'l'){
+		listdirectory(sd);
+	}
+}	
+
+void download(int sd)//download file
+{
+	int i1=0,i2=0,i3=0;
+	int len1=0,len2=0,len3=0;
+	char sbuf[150],rbuf[150];
+	char file_name[146],dbuf1[146];
+	bzero(file_name,sizeof(file_name));bzero(sbuf,sizeof(sbuf));bzero(rbuf,sizeof(rbuf));	
+	printf("Please enter the file you want to download\n");
+	scanf("%s",&file_name);
+	len1 = strlen(file_name);
+	preparepdu('D',len1,file_name,sbuf);
+	sendpdu(sd,sbuf);
+	receiver('F',sd,file_name);		
+	
+}
+
+void upload(int sd)
+{
+	int i1=0,i2=0,i3=0;
+	int len1=0,len2=0,len3=0,bytes_read =0;
+	char sbuf[150],rbuf[150];
+	char file_name[146],dbuf1[146];
+	FILE *fp1;
+	bzero(file_name,sizeof(file_name));bzero(sbuf,sizeof(sbuf));bzero(rbuf,sizeof(rbuf));
+	printf("Enter file name you want to upload\n");
+	scanf("%s",file_name);
+	len1 = strlen(file_name);
+	preparepdu('U',len1,file_name,sbuf);
+	sendpdu(sd,sbuf);
+	receiver('U',sd, "NULL");
+
+
+	if ((fp1 = fopen (file_name, "r")) == NULL){
+		printf("error openning file: %s\n",file_name);
+	}
+		
+		
+	else{
+		bzero(sbuf,BUFLEN);
+		while((bytes_read = fread(dbuf1,sizeof(char),146,fp1))>0){
+			printf("sending %d bytes to client\n",bytes_read);
+			preparepdu('F',bytes_read,dbuf1,sbuf);
+			sendpdu(sd,sbuf);
+		}
+		printf("closing file...\n");
+		fclose(fp1);
+	}
+	
+}
+void changedirectory(int sd)
+{
+	int i1=0,i2=0,i3=0;
+	int len1=0,len2=0,len3=0,bytes_read =0;
+	char sbuf[150],rbuf[150];
+	char file_name[146],dbuf1[146],dir_name[146];
+	FILE *fp1;
+	bzero(file_name,sizeof(file_name));bzero(sbuf,sizeof(sbuf));bzero(rbuf,sizeof(rbuf));
+		
+	printf("Enter the directory you want to change OR enter 'root' to go back to /server directory\n");
+	scanf("%s",dir_name);
+	len1 = strlen(dir_name);
+	preparepdu('P',len1,dir_name,sbuf);
+	sendpdu(sd,sbuf);
+	receiver('R',sd,"NULL");
+
+}
+
+void listdirectory(int sd)
+{
+	int len=0;
+	char path[146],sbuf[BUFLEN];
+	printf("Enter directory path: ");
+	scanf("%s",path);
+	len = strlen(path);
+	preparepdu('L',len,path,sbuf);
+	sendpdu(sd,sbuf);
+	receiver('I',sd,path);
+	
+}
+	
+void preparepdu (char type, int length, char data[],char sbuf[])
+{
+	char str[3];
+	int i=0,i1=0, i2=0, i3=0,i4=0,i5=0,i6=0,i7=0,i8=0,i9=0,i10=0,i11=0,i12=0,i13=0;
+	sprintf(str, "%d",length);
+	for (i13;i13<3;i13++)
+		{
+			if (str[i13] == '\0'|| str[i13]== ' ')
+				str[i13] = '.';
+		}
+	if (type =='D' || type == 'd')
+	{
+		sbuf[0] = 'D'; //TYPE
+		for (i1;i1<3;i1++) //LENGTH
+		{
+			sbuf[i1+1] = str[i1];
+			
+		}
+		for (i2; i2<length;i2++) //DATA
+		{
+			sbuf[i2+4] = data[i2];
+			printf("sbuf[%d] = %c\n",i2,sbuf[i2]);
+		}
+	}
+	else if (type =='U' || type == 'u')
+	{
+		
+		sbuf[0] = 'U'; //PDU to request file upload
+		for (i3;i3<3;i3++) //LENGTH
+		{
+			sbuf[i3+1] = str[i3];
+		}
+		for (i4; i4<length;i4++) //DATA
+		{
+			sbuf[i4+4]=data[i4];
+		}
+		
+	}
+	else if (type =='F' || type == 'f')
+	{
+		sbuf[0] = 'F'; //PDU for uploading file 
+		for (i5;i5<3;i5++) //LENGTH
+		{
+			sbuf[i5+1] = str[i5];
+		}
+		for (i6; i6<length;i6++) //DATA
+		{
+			sbuf[i6+4]=data[i6];
+		}
+	}
+	else if (type =='E' || type == 'e') 
+	{
+		sbuf[0] = 'E'; //PDU to send error
+		for (i7;i7<3;i7++) //LENGTH
+		{
+			sbuf[i7+1] = str[i7];
+		}
+		for (i8; i8<length;i8++) //DATA
+		{
+			sbuf[i8+4]=data[i8];
+		}
+	}
+	else if (type =='P' || type == 'p') 
+	{
+		sbuf[0] = 'P';//PDU TYPE CHANGE DiRECTORY
+		for (i9;i9<3;i9++) //LENGTH
+		{
+			sbuf[i9+1] = str[i9];
+		}
+		for (i10; i10<length;i10++) //DATA
+		{
+			sbuf[i10+4]=data[i10];
+		}
+	}
+	else if (type =='L' || type == 'l') 
+	{
+		sbuf[0] = 'L'; //PDU to send error
+		for (i11;i11<3;i11++) //LENGTH
+		{
+			sbuf[i11+1] = str[i11];
+		}
+		for (i12; i12<length;i12++) //DATA
+		{
+			sbuf[i12+4]=data[i12];
+		}
+	}
+}
+
+void sendpdu(int sd, char pdu[])
+{
+	int n2=0;
+	if ((n2 = send(sd,pdu,BUFLEN,0))<0)
+	{				
+		printf("Error writing to socket\n");
+		exit(0);
+	}
+
+	
+}
+
+void receiver(char action, int sd, char file_name[])
+{
+	int n1=0,n2=0,n3=0,n4=0;
+	int i1=0,i2=0,i3=0,i4=0;
+	int write_size = 0,len_of_data=0,len1=0,len2=0,len3=0;
+	char rbuf[BUFLEN],dbuf1[146],dbuf2[146],data[146],errormsg[146];
+	FILE *fp1;
+	
+	bzero(rbuf,sizeof(rbuf));bzero(data,sizeof(data));bzero(errormsg,sizeof(errormsg));//clean buffers	
+	
+	if (action == 'F'){
+	fp1 = fopen(file_name, "w");
+	printf(" in receiver() just opened file\n");
+		while ((n1 = recv(sd, rbuf, BUFLEN, 0))> 0)
+		{
+			if (rbuf[0]=='F'){
+				getonlydata(rbuf,data);
+				len_of_data = returnlength(rbuf);
+				write_size = fwrite(data, sizeof(char),len_of_data, fp1);
+			}
+			if (rbuf[0]=='E'){ //error message occured
+				len1=returnlength(rbuf);
+				for (i1;i1<len1;i1++){
+					errormsg[i1] = rbuf[i1+4];
+				}
+				printf("Error: %s\n",errormsg);
+				break;
+			}
+			if (len_of_data < 146)
+					break;
+
+
+		}
+	      
+	        if (n1 < 0) 
+			printf("recv() failed.\n");
+		fclose(fp1);
+		printf("closing file\n");
+	}
+	else if (action == 'R'){
+		n2 = recv(sd,rbuf,BUFLEN,0);
+		if (rbuf[0] == 'R')
+			printf("server is ready\n");			
+	}
+	else if (action == 'U'){
+		n3 = recv(sd,rbuf,BUFLEN,0);
+		if (rbuf[0] == 'E'){
+			getonlydata(rbuf,errormsg);
+			printf("Error: %s\n",errormsg);	
+		}
+		else if (rbuf[0] == 'R'){
+			printf("Server ready to upload file \n");
+		}
+	}
+	
+	else if (action == 'I'){
+		n4 = recv (sd,rbuf,BUFLEN,0);
+		getonlydata(rbuf,data);
+		printf("The file list:\n");
+		printf("%s..\n",data);
+		
+	}
+	
+
+}
+	/*
+	else 
+		while ((n1 = read(sd,rbuf,BUFLEN))> 0)
+		{
+			if (rbuf[0] == 'R')
+			{
+			printf("Server is ready\n");
+			break;		
+			}	
+		}
+	*/
+
+
+int returnlength(char pdu[])
+{
+	int i1=0,i2=0;
+	int ret;
+	char str15[3];
+	for (i1;i1<3;i1++)
+	{
+		str15[i1] = pdu[i1+1];
+	}
+	
+	printf("content of str: %s\n",str15);
+	ret = atoi(str15);
+	return ret;
+
+}
+
+
+void getonlydata(char pdu[],char data[])
+{
+	int i1=0,len_of_data=0;
+	for (i1 ; i1<146; i1++)	
+	data[i1]=pdu[i1+4];	
+}
+
+
+	
